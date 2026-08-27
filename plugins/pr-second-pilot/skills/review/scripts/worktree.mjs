@@ -47,9 +47,28 @@ function listWorktrees(repoRoot) {
  * reinstalling them. Saves minutes and gigabytes; safe because the fixer never
  * writes into them.
  */
+const LINKABLE = ["node_modules", "app/node_modules", "web/node_modules", "api/.venv"];
+
+/**
+ * Незакоммиченные правки в каталоге — но не те, что мы сами туда положили.
+ *
+ * linkDeps создаёт симлинки на зависимости; git видит их как untracked, и
+ * проверка «грязный ли каталог» срабатывала на собственном мусоре плагина.
+ * Итог: он отказывался убирать за собой из-за того, что сам же и сделал.
+ */
+function foreignChanges(wt) {
+  const r = git(wt, ["status", "--porcelain"]);
+  if (!r.ok) return [];
+  const ours = new Set(LINKABLE);
+  return r.stdout.split("\n").map((l) => l.trim()).filter(Boolean).filter((line) => {
+    const p = line.replace(/^\S+\s+/, "").replace(/\/$/, "");
+    return !ours.has(p);
+  });
+}
+
 function linkDeps(repoRoot, wt) {
   const linked = [];
-  for (const rel of ["node_modules", "app/node_modules", "web/node_modules", "api/.venv"]) {
+  for (const rel of LINKABLE) {
     const src = path.join(repoRoot, rel);
     const dst = path.join(wt, rel);
     if (!existsSync(src) || existsSync(dst)) continue;
@@ -69,10 +88,10 @@ function add(repoRoot, slug, sha) {
     }
     // Reused worktree pointing somewhere else: move it, but never over
     // uncommitted work.
-    const dirty = git(wt, ["status", "--porcelain"]);
-    if (dirty.ok && dirty.stdout.trim()) {
+    const dirty = foreignChanges(wt);
+    if (dirty.length) {
       return {
-        ok: false, error: "worktree_dirty", path: wt,
+        ok: false, error: "worktree_dirty", path: wt, changes: dirty.slice(0, 10),
         detail: "В рабочем каталоге есть незакоммиченные правки — не перезаписываю. Разберись руками или удали его через --remove.",
       };
     }
@@ -94,11 +113,11 @@ function remove(repoRoot, slug, force) {
     git(repoRoot, ["worktree", "prune"]);
     return { ok: true, removed: false, reason: "not_present" };
   }
-  const dirty = git(wt, ["status", "--porcelain"]);
-  if (!force && dirty.ok && dirty.stdout.trim()) {
+  const dirty = foreignChanges(wt);
+  if (!force && dirty.length) {
     return {
       ok: false, error: "worktree_dirty", path: wt,
-      changes: dirty.stdout.trim().split("\n").length,
+      changes: dirty.slice(0, 10), count: dirty.length,
       detail: "Есть незакоммиченные правки. Передай --force, если они точно не нужны.",
     };
   }

@@ -139,6 +139,20 @@ async function main() {
   }
 
   const source = gate.source || "local";
+  // Просили CI — значит локальный прогон не заменитель. Без номера PR читать
+  // проверки неоткуда, и тихо свалиться в локальные команды означало бы
+  // отрапортовать зелёным то, что никто не проверял.
+  if ((source === "ci" || source === "both") && !args.pr) {
+    emit({
+      ok: false, source, error: "pr_required",
+      detail: `gate.source=${source}, но --pr не передан`,
+      hint: source === "ci"
+        ? "для локальной ветки без PR поставь gate.source=local"
+        : "передай --pr либо переключи gate.source на local",
+      checks: [],
+    });
+    return;
+  }
   let ciChecks = [];
   if ((source === "ci" || source === "both") && args.pr) {
     const ci = await ciGate(repoRoot, args.pr, Number(gate.ci_wait_minutes ?? 0), args["head-sha"]);

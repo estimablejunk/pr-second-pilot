@@ -162,7 +162,29 @@ function preloadFiles(repoRoot, target, cfg) {
   const capKb = Number(cfg.reviewer?.preload_max_kb ?? 60);
   const budgetKb = Number(cfg.reviewer?.preload_budget_kb ?? 200);
 
-  const paths = (target.files || []).map((f) => f.path ?? f).filter(Boolean);
+  // Бюджет вложения конечен, и порядок, в котором его тратят, решает, что
+  // ревьюер увидит. Раньше файлы шли как пришли — по алфавиту, — и на большом
+  // PR бюджет доедали данные и картинки, а исправленный код в промпт не
+  // попадал. На живом прогоне так выбило ровно те файлы, чьи правки и надо
+  // было подтвердить.
+  //
+  // Бинарники исключаются до всякой сортировки: их байты в промпте не значат
+  // ничего, а место занимают.
+  const BINARY = /\.(png|jpe?g|gif|webp|avif|ico|svgz|pdf|zip|gz|tgz|bz2|xz|7z|rar|mp[34]|mov|avi|mkv|wav|ogg|woff2?|ttf|otf|eot|so|dylib|dll|exe|bin|wasm|class|jar|pyc|db|sqlite3?|lock)$/i;
+  const DATA = /\.(json|ya?ml|toml|csv|tsv|snap|po|pot|xlf)$/i;
+  const TEST = /(^|\/)(tests?|__tests__|spec)\//i;
+
+  const all = (target.files || []).map((f) => f.path ?? f).filter(Boolean);
+  const binaries = all.filter((p) => BINARY.test(p));
+  // Крупная правка — обычно и есть предмет ревью; данные и тесты идут следом.
+  const weight = (f) => {
+    const meta = (target.files || []).find((x) => (x.path ?? x) === f) || {};
+    return (meta.additions ?? 0) + (meta.deletions ?? 0);
+  };
+  const rank = (f) => (BINARY.test(f) ? 100 : 0) + (DATA.test(f) ? 20 : 0) + (TEST.test(f) ? 10 : 0);
+  const paths = all
+    .filter((p) => !BINARY.test(p))
+    .sort((a, b) => rank(a) - rank(b) || weight(b) - weight(a));
   const included = [], skipped = [], bodies = [];
   let used = 0;
   const blocks = [];
@@ -225,6 +247,7 @@ function preloadFiles(repoRoot, target, cfg) {
   }
 
   if (!blocks.length) return { text: "", included, deps, skipped };
+  for (const b of binaries) skipped.push({ path: b, why: "бинарный файл" });
   const note = skipped.length
     ? `\nНе вложены (открой сам, если понадобятся): ${skipped.map((x) => `${x.path} — ${x.why}`).join("; ")}.`
     : "";
@@ -360,24 +383,24 @@ function extractContract(contractPath) {
 
 function buildPrompt({ template, reviewerText, target, headSha, diff, gate, findings, isDelta, round, cfg, contract, stack, preload }) {
   return template
-    .replace("{{RESET_BLOCK}}", round > 1 ? RESET_BLOCK : "")
-    .replace("{{REVIEWER_INSTRUCTIONS}}", reviewerText)
-    .replace("{{ROUND}}", String(round))
-    .replace("{{MODE}}", isDelta
+    .replaceAll("{{RESET_BLOCK}}", round > 1 ? RESET_BLOCK : "")
+    .replaceAll("{{REVIEWER_INSTRUCTIONS}}", reviewerText)
+    .replaceAll("{{ROUND}}", String(round))
+    .replaceAll("{{MODE}}", isDelta
       ? "ПОВТОРНОЕ РЕВЬЮ ПОСЛЕ ПРАВОК. Ниже дельта — только то, что изменилось с прошлого твоего вердикта."
       : "ПЕРВОЕ РЕВЬЮ. Ниже полный дифф изменения.")
-    .replace("{{TARGET}}", renderTarget({ ...target, head_sha: headSha || target.head_sha }))
-    .replace("{{GATE}}", renderGate(gate))
-    .replace("{{OPEN_FINDINGS}}", renderOpenFindings(findings, cfg))
-    .replace("{{OUTPUT_LANGUAGE}}",
+    .replaceAll("{{TARGET}}", renderTarget({ ...target, head_sha: headSha || target.head_sha }))
+    .replaceAll("{{GATE}}", renderGate(gate))
+    .replaceAll("{{OPEN_FINDINGS}}", renderOpenFindings(findings, cfg))
+    .replaceAll("{{OUTPUT_LANGUAGE}}",
       OUTPUT_INSTRUCTION[String(cfg.report?.language || "en").slice(0, 2)] ?? OUTPUT_INSTRUCTION.en)
-    .replace("{{FILES}}", preload?.text ?? "")
-    .replace("{{DIFF}}", diff)
-    .replace("{{BLOCKING}}", (cfg.loop.blocking_severities || []).join(", "))
-    .replace("{{STACK_PROFILE}}", stack?.text
+    .replaceAll("{{FILES}}", preload?.text ?? "")
+    .replaceAll("{{DIFF}}", diff)
+    .replaceAll("{{BLOCKING}}", (cfg.loop.blocking_severities || []).join(", "))
+    .replaceAll("{{STACK_PROFILE}}", stack?.text
       ? `<stack_profile name="${stack.name}">\n${stack.text}\n</stack_profile>`
       : "")
-    .replace("{{CONTRACT}}", contract);
+    .replaceAll("{{CONTRACT}}", contract);
 }
 
 function main() {

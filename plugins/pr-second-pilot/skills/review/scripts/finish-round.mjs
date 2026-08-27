@@ -43,16 +43,39 @@ async function main() {
 
   const steps = [];
 
-  // 1. свести находки
-  const merged = runScript("merge-findings.mjs", {
-    stdin: JSON.stringify({ state, results: review.results ?? [], round }),
-  });
-  if (!merged.ok || !merged.data.ok) {
-    emit({ ok: false, error: "merge_failed", detail: merged.detail ?? merged.data });
-    return;
+  // 1. свести находки — но только если этот раунд ещё не сведён.
+  //
+  // Повторное сведение того же вердикта разрушительно: замечания, которые
+  // исполнитель уже пометил исправленными, встречаются во входящих результатах
+  // снова, и переходы merge-findings честно переводят их fixed → open с
+  // reopened_count++. На живом прогоне это выглядело как `raised → fixed →
+  // reopened` и делало исправления невидимыми.
+  //
+  // Порядок фаз это предотвращает (сведение идёт до правок), но полагаться
+  // только на порядок нельзя: повторный вызов после сбоя, ручная отладка или
+  // будущая правка SKILL.md вернут проблему молча.
+  const alreadyCommitted = (state.round ?? 0) >= round;
+  let m;
+  if (alreadyCommitted) {
+    m = {
+      findings: state.findings || [],
+      counts: state.counts || {},
+      open_ids: (state.counts?.open_ids) || [],
+      severity_counts: state.counts?.severity_counts || {},
+      duplicate_pairs: [],
+    };
+    steps.push({ step: "merge", skipped: "round_already_merged", state_round: state.round });
+  } else {
+    const merged = runScript("merge-findings.mjs", {
+      stdin: JSON.stringify({ state, results: review.results ?? [], round }),
+    });
+    if (!merged.ok || !merged.data.ok) {
+      emit({ ok: false, error: "merge_failed", detail: merged.detail ?? merged.data });
+      return;
+    }
+    m = merged.data;
+    steps.push({ step: "merge", counts: m.counts, duplicates: m.duplicate_pairs?.length ?? 0 });
   }
-  const m = merged.data;
-  steps.push({ step: "merge", counts: m.counts, duplicates: m.duplicate_pairs?.length ?? 0 });
 
   // 2. решение об остановке
   const cfg = state.config ?? {};

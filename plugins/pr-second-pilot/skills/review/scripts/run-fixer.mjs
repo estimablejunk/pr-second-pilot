@@ -50,14 +50,18 @@ function renderGate(gate) {
 
 function buildBrief({ template, state, round, findings, reportPath }) {
   const t = state.target;
+  // replaceAll, а не replace: со строкой replace меняет ТОЛЬКО первое вхождение,
+  // а {{ROUND}} и {{REPORT_PATH}} стоят в шаблоне по два раза — в заголовке и в
+  // примере JSON. Исполнитель получал бриф, где путь для отчёта остался
+  // плейсхолдером, и писать отчёт было некуда.
   return template
-    .replace("{{ROUND}}", String(round))
-    .replace("{{TARGET}}", t.number ? `PR #${t.number} — ${t.title}` : `ветка ${t.head_ref} → ${t.base_ref}`)
-    .replace("{{REPO_ROOT}}", state.repo_root)
-    .replace("{{GATE}}", renderGate(state.gate))
-    .replace("{{FINDINGS}}", findings.length ? renderFindings(findings) : "Замечаний нет — правь только красные проверки выше.")
-    .replace("{{FINDING_IDS}}", findings.map((f) => f.id).join(", ") || "—")
-    .replace("{{REPORT_PATH}}", reportPath);
+    .replaceAll("{{ROUND}}", String(round))
+    .replaceAll("{{TARGET}}", t.number ? `PR #${t.number} — ${t.title}` : `ветка ${t.head_ref} → ${t.base_ref}`)
+    .replaceAll("{{REPO_ROOT}}", state.repo_root)
+    .replaceAll("{{GATE}}", renderGate(state.gate))
+    .replaceAll("{{FINDINGS}}", findings.length ? renderFindings(findings) : "Замечаний нет — правь только красные проверки выше.")
+    .replaceAll("{{FINDING_IDS}}", findings.map((f) => f.id).join(", ") || "—")
+    .replaceAll("{{REPORT_PATH}}", reportPath);
 }
 
 async function runSubprocess(cfg, state, brief, work, resumeSessionId) {
