@@ -9,6 +9,7 @@
 //   node config.mjs --repo-root <path> [--show] [--set key=value ...]
 
 import path from "node:path";
+import { SUPPORTED } from "./i18n.mjs";
 import { existsSync } from "node:fs";
 import {
   USER_CONFIG_DIR, emit, bail, parseArgs, readJson, writeJsonAtomic, ensureDir,
@@ -111,7 +112,9 @@ export const DEFAULTS = {
     // git-exclude writes to .git/info/exclude, which is local and never lands
     // in the PR. gitignore edits the tracked file — offered, not default.
     exclude_via: "git-exclude",
-    language: "ru",
+    // Язык ОТЧЁТА и вердиктов. Промпты ревьюера остаются на одном языке —
+    // это инструкции модели, а не то, что читает человек.
+    language: "en",
   },
   notify: {
     telegram: {
@@ -249,6 +252,9 @@ export function validate(cfg) {
   }
   if (cfg.merge.enabled && cfg.merge.allow_without_approval === true) {
     w.push("merge.allow_without_approval=true — апрув человека не потребуется.");
+  }
+  if (!SUPPORTED.includes(String(cfg.report.language).slice(0, 2))) {
+    w.push(`report.language="${cfg.report.language}" — поддерживаются ${SUPPORTED.join(", ")}; будет английский.`);
   }
   if (cfg.notify.telegram.enabled) {
     const tok = cfg.notify.telegram.bot_token || process.env[cfg.notify.telegram.bot_token_env];

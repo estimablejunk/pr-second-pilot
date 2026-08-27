@@ -12,6 +12,7 @@ import { readFileSync, existsSync } from "node:fs";
 import {
   emit, bail, parseArgs, readJson, writeAtomic, ensureDir, truncate, git,
 } from "./lib.mjs";
+import { OUTPUT_INSTRUCTION } from "./i18n.mjs";
 
 const RESET_BLOCK = `<reset>
 Забудь свои прошлые оценки этого изменения. Ты видишь текущее состояние кода
@@ -368,6 +369,8 @@ function buildPrompt({ template, reviewerText, target, diff, gate, findings, isD
     .replace("{{TARGET}}", renderTarget(target))
     .replace("{{GATE}}", renderGate(gate))
     .replace("{{OPEN_FINDINGS}}", renderOpenFindings(findings, cfg))
+    .replace("{{OUTPUT_LANGUAGE}}",
+      OUTPUT_INSTRUCTION[String(cfg.report?.language || "en").slice(0, 2)] ?? OUTPUT_INSTRUCTION.en)
     .replace("{{FILES}}", preload?.text ?? "")
     .replace("{{DIFF}}", diff)
     .replace("{{BLOCKING}}", (cfg.loop.blocking_severities || []).join(", "))

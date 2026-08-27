@@ -6,28 +6,10 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { emit, bail, parseArgs, readJson, writeAtomic, sha256File } from "./lib.mjs";
+import { dict, fmt } from "./i18n.mjs";
 
-const STATUS_LINE = {
-  in_review: "🔄 идёт ревью",
-  fixing: "🔧 идут правки",
-  awaiting_human: "⏸ ждёт твоего решения",
-  merged: "🚀 смержено",
-  allowed: "✅ мерж разрешён",
-  allowed_with_advisory: "✅ мерж разрешён (есть необязательные замечания)",
-  rate_limited: "⏳ лимит подписки — можно продолжить позже",
-  oscillating: "⚠️ замечание открывается повторно — цикл остановлен",
-  stuck: "⚠️ прогресса нет — цикл остановлен",
-  regressed: "⚠️ блокеров стало больше — цикл остановлен",
-  max_rounds: "⚠️ бюджет раундов исчерпан",
-  needs_human: "⏸ нужно твоё решение",
-  failed: "❌ сбой",
-};
-
+// Уровни не переводятся: их ищут поиском и сверяют с конфигом.
 const SEV = { critical: "🔴 critical", major: "🟠 major", minor: "🟡 minor", nit: "⚪ nit" };
-const ST = {
-  open: "открыто", fixed: "исправлено, ждёт проверки", verified: "подтверждено закрытым",
-  disputed: "оспорено исполнителем", wontfix: "снято ревьюером", advisory: "необязательное",
-};
 
 /**
  * The rounds table needs a glance-readable cell, not the raw gate summary.
@@ -47,41 +29,51 @@ function compactGate(summary) {
   return bad.length ? `${pass}/${statuses.length} ✓, ${bad.length} ✗` : `${pass}/${statuses.length} ✓`;
 }
 
-const HUMAN_MARK = "## Ответы человека";
+// Якорь блока человека — машинный комментарий, а не заголовок. Заголовок
+// переводится вместе с остальным отчётом, и если искать по нему, то смена
+// report.language потеряет всё, что человек написал. Старый русский заголовок
+// распознаётся как запасной вариант, чтобы отчёты, созданные до локализации,
+// не осиротели.
+const HUMAN_ANCHOR = "<!-- pr-second-pilot:human -->";
+const HUMAN_ANCHOR_LEGACY = "## Ответы человека";
 
 /** The one hand-editable region: preserved verbatim across re-renders. */
 function extractHumanBlock(reportPath) {
   if (!existsSync(reportPath)) return null;
   const text = readFileSync(reportPath, "utf8");
-  const i = text.indexOf(HUMAN_MARK);
+  let mark = HUMAN_ANCHOR;
+  let i = text.indexOf(mark);
+  if (i < 0) { mark = HUMAN_ANCHOR_LEGACY; i = text.indexOf(mark); }
   if (i < 0) return null;
-  const rest = text.slice(i + HUMAN_MARK.length);
+  let rest = text.slice(i + mark.length);
+  // За новым якорем идёт локализованный заголовок — он не часть ответа.
+  rest = rest.replace(/^\s*##[^\n]*\n/, "");
   const end = rest.search(/\n<!-- pr-second-pilot:end-human -->/);
   return (end < 0 ? rest : rest.slice(0, end)).trim();
 }
 
-function renderFinding(f) {
+function renderFinding(f, L) {
   const lines = [
     `#### \`${f.id}\` ${SEV[f.severity] ?? f.severity} — ${f.title}`,
     ``,
-    `**Статус:** ${ST[f.status] ?? f.status}${f.out_of_scope ? " · вне диффа" : ""}` +
-    `${f.unproven ? " · понижен: нет механизма отказа" : ""}` +
-    `${(f.reopened_count || 0) > 0 ? ` · открывалось повторно ×${f.reopened_count}` : ""}`,
-    f.file ? `**Где:** \`${f.file}\`` : null,
-    f.sources?.length ? `**Нашёл:** ${f.sources.join(", ")}` : null,
+    `**${L.f_status}:** ${L.fs[f.status] ?? f.status}${f.out_of_scope ? ` · ${L.out_of_scope}` : ""}` +
+    `${f.unproven ? ` · ${L.downgraded}` : ""}` +
+    `${(f.reopened_count || 0) > 0 ? ` · ${L.reopened} ×${f.reopened_count}` : ""}`,
+    f.file ? `**${L.f_where}:** \`${f.file}\`` : null,
+    f.sources?.length ? `**${L.f_found_by}:** ${f.sources.join(", ")}` : null,
     ``,
-    f.trigger ? `- **Триггер.** ${f.trigger}` : null,
-    f.mechanism ? `- **Механизм.** ${f.mechanism}` : null,
-    f.consequence ? `- **Последствие.** ${f.consequence}` : null,
-    f.required ? `- **Требуется.** ${f.required}` : null,
-    f.proof ? `- **Доказательство исправления.** ${f.proof}` : null,
+    f.trigger ? `- **${L.f_trigger}.** ${f.trigger}` : null,
+    f.mechanism ? `- **${L.f_mechanism}.** ${f.mechanism}` : null,
+    f.consequence ? `- **${L.f_consequence}.** ${f.consequence}` : null,
+    f.required ? `- **${L.f_required}.** ${f.required}` : null,
+    f.proof ? `- **${L.f_proof}.** ${f.proof}` : null,
   ].filter((l) => l !== null);
 
   const history = (f.history || []).filter((h) => h.actor === "fixer" || h.action === "dispute_rejected");
   if (history.length) {
-    lines.push(``, `<details><summary>История</summary>`, ``);
+    lines.push(``, `<details><summary>${L.history}</summary>`, ``);
     for (const h of history) {
-      lines.push(`- раунд ${h.round} · ${h.actor} · ${h.action}${h.note ? ` — ${h.note}` : ""}${h.edit ? ` (\`${h.edit}\`)` : ""}`);
+      lines.push(`- ${L.t_round} ${h.round} · ${h.actor} · ${h.action}${h.note ? ` — ${h.note}` : ""}${h.edit ? ` (\`${h.edit}\`)` : ""}`);
     }
     lines.push(``, `</details>`);
   }
@@ -89,6 +81,7 @@ function renderFinding(f) {
 }
 
 function render(state, humanBlock) {
+  const L = dict(state.config?.report?.language);
   const t = state.target;
   const c = state.counts || {};
   const findings = state.findings || [];
@@ -101,96 +94,97 @@ function render(state, humanBlock) {
   const closed = group((f) => f.status === "verified" || f.status === "wontfix");
 
   const out = [];
-  out.push(`# Ревью ${t.number ? `PR #${t.number}` : `ветки \`${t.head_ref}\``}`);
+  out.push(`# ${t.number ? fmt(L.title_pr, t.number) : fmt(L.title_branch, t.head_ref)}`);
   out.push(``);
-  out.push(`> ${STATUS_LINE[state.status] ?? state.status}`);
+  out.push(`> ${L.st[state.status] ?? state.status}`);
   out.push(``);
   out.push(`| | |`);
   out.push(`|---|---|`);
-  if (t.title) out.push(`| Заголовок | ${t.title} |`);
-  if (t.url) out.push(`| Ссылка | ${t.url} |`);
-  out.push(`| База → голова | \`${t.base_ref}\` → \`${t.head_ref}\` |`);
-  out.push(`| Ревьюил коммит | \`${(state.reviewed_sha || t.head_sha || "").slice(0, 12)}\` |`);
-  out.push(`| Объём | +${t.stats?.additions ?? "?"} / −${t.stats?.deletions ?? "?"} в ${t.stats?.files ?? "?"} файлах |`);
-  out.push(`| Раунд | ${state.round} из ${Math.min(state.config?.loop?.max_rounds ?? 4, state.config?.loop?.hard_cap ?? 8)} |`);
-  out.push(`| Ревьюер | ${state.config?.reviewer?.model} · усилие ${state.config?.reviewer?.effort} · ${(state.config?.reviewer?.panel ?? []).join(" + ")} |`);
-  out.push(`| Исполнитель | ${state.config?.fixer?.mode === "inherit" ? "текущая сессия" : `${state.config?.fixer?.model} · усилие ${state.config?.fixer?.effort}`} |`);
-  out.push(`| Обновлено | ${state.updated_at} |`);
+  if (t.title) out.push(`| ${L.m_title} | ${t.title} |`);
+  if (t.url) out.push(`| ${L.m_link} | ${t.url} |`);
+  out.push(`| ${L.m_base_head} | \`${t.base_ref}\` → \`${t.head_ref}\` |`);
+  out.push(`| ${L.m_reviewed} | \`${(state.reviewed_sha || t.head_sha || "").slice(0, 12)}\` |`);
+  out.push(`| ${L.m_size} | +${t.stats?.additions ?? "?"} / −${t.stats?.deletions ?? "?"} ${t.stats?.files ?? "?"} ${L.m_files} |`);
+  out.push(`| ${L.t_round} | ${fmt(L.round_of, state.round, Math.min(state.config?.loop?.max_rounds ?? 4, state.config?.loop?.hard_cap ?? 8))} |`);
+  out.push(`| ${L.m_reviewer} | ${state.config?.reviewer?.model} · ${L.effort} ${state.config?.reviewer?.effort} · ${(state.config?.reviewer?.panel ?? []).join(" + ")} |`);
+  out.push(`| ${L.m_fixer} | ${state.config?.fixer?.mode === "inherit" ? L.inherit : `${state.config?.fixer?.model} · ${L.effort} ${state.config?.fixer?.effort}`} |`);
+  out.push(`| ${L.m_updated} | ${state.updated_at} |`);
   out.push(``);
 
   // Итог — сразу под статусом. Отчёт открывают через неделю ради ответа
   // «что в итоге получилось», а не ради пятнадцати карточек с историями.
   if (state.summary?.text) {
-    out.push(`## Что сделано`, ``, state.summary.text.trim(), ``);
+    out.push(`## ${L.summary}`, ``, state.summary.text.trim(), ``);
   }
 
   if (state.merge?.merged) {
-    out.push(`## Смержено`, ``);
-    out.push(`Метод: **${state.merge.method}**, коммит \`${(state.merge.merge_commit || "").slice(0, 12)}\`` +
+    out.push(`## ${L.merged}`, ``);
+    out.push(`${L.method}: **${state.merge.method}**, ${L.commit} \`${(state.merge.merge_commit || "").slice(0, 12)}\`` +
       `${state.merge.merged_at ? `, ${state.merge.merged_at}` : ""}.`);
     if (state.merge.branch_deleted === false) {
-      out.push(``, `Ветка не удалена: ${state.merge.cleanup_note || "уборка после мержа не прошла"}.`);
+      out.push(``, `${L.branch_kept}: ${state.merge.cleanup_note || "cleanup after merge did not run"}.`);
     }
     out.push(``);
   }
 
   if (state.last_stop?.human_note) {
-    out.push(`## ⚠️ Требуется решение`, ``, state.last_stop.human_note, ``);
+    out.push(`## ⚠️ ${L.decision_needed}`, ``, state.last_stop.human_note, ``);
   }
 
   if (state.gate && !state.gate.skipped) {
-    out.push(`## Объективные проверки`, ``);
+    out.push(`## ${L.gate}`, ``);
     out.push(state.gate.checks.map((c2) =>
       `- ${c2.status === "pass" ? "✅" : c2.status === "unavailable" ? "➖" : "❌"} **${c2.name}** — \`${c2.command}\`` +
       `${c2.status === "pass" ? "" : ` → ${c2.status}`}`).join("\n"));
     out.push(``);
   }
 
-  out.push(`## Итог`, ``);
-  out.push(`Блокеров: **${c.blocking ?? 0}** · открыто: ${c.open ?? 0} · ждут проверки: ${c.fixed ?? 0} · ` +
-           `закрыто: ${(c.verified ?? 0) + (c.wontfix ?? 0)} · необязательных: ${c.advisory ?? 0}`);
+  out.push(`## ${L.outcome}`, ``);
+  out.push(`${L.blockers}: **${c.blocking ?? 0}** · ${L.open}: ${c.open ?? 0} · ${L.awaiting}: ${c.fixed ?? 0} · ` +
+           `${L.closed}: ${(c.verified ?? 0) + (c.wontfix ?? 0)} · ${L.advisory_n}: ${c.advisory ?? 0}`);
   out.push(``);
   if (state.counts?.severity_counts) {
     const s = state.counts.severity_counts;
-    out.push(`Открытые по уровням: 🔴 ${s.critical ?? 0} · 🟠 ${s.major ?? 0} · 🟡 ${s.minor ?? 0} · ⚪ ${s.nit ?? 0}`);
+    out.push(`${L.by_severity}: 🔴 ${s.critical ?? 0} · 🟠 ${s.major ?? 0} · 🟡 ${s.minor ?? 0} · ⚪ ${s.nit ?? 0}`);
     out.push(``);
   }
 
   const section = (title, list) => {
     if (!list.length) return;
     out.push(`## ${title} (${list.length})`, ``);
-    for (const f of list) { out.push(renderFinding(f), ``); }
+    for (const f of list) { out.push(renderFinding(f, L), ``); }
   };
 
-  section("Блокирует мерж", open.filter((f) => (state.config?.loop?.blocking_severities ?? ["critical", "major"]).includes(f.severity)));
-  section("Открыто, не блокирует", open.filter((f) => !(state.config?.loop?.blocking_severities ?? ["critical", "major"]).includes(f.severity)));
-  section("Исправлено, ждёт проверки", fixed);
-  section("Спорные — нужен арбитраж", disputed);
-  section("Необязательные замечания", advisory);
+  section(L.sec_blocking, open.filter((f) => (state.config?.loop?.blocking_severities ?? ["critical", "major"]).includes(f.severity)));
+  section(L.sec_open, open.filter((f) => !(state.config?.loop?.blocking_severities ?? ["critical", "major"]).includes(f.severity)));
+  section(L.sec_fixed, fixed);
+  section(L.sec_disputed, disputed);
+  section(L.sec_advisory, advisory);
 
   if (closed.length) {
-    out.push(`## Закрыто (${closed.length})`, ``, `<details><summary>Показать</summary>`, ``);
+    out.push(`## ${L.sec_closed} (${closed.length})`, ``, `<details><summary>${L.show}</summary>`, ``);
     for (const f of closed) {
-      out.push(`- \`${f.id}\` ${SEV[f.severity] ?? f.severity} ${f.title} — ${ST[f.status]}`);
+      out.push(`- \`${f.id}\` ${SEV[f.severity] ?? f.severity} ${f.title} — ${L.fs[f.status] ?? f.status}`);
     }
     out.push(``, `</details>`, ``);
   }
 
   if (state.human_questions?.length) {
-    out.push(`## Вопросы к тебе`, ``);
+    out.push(`## ${L.sec_questions}`, ``);
     for (const q of state.human_questions) {
-      out.push(`- **${q.member ?? "ревьюер"}** (раунд ${q.round ?? "?"}): ${q.question}`);
+      out.push(`- **${q.member ?? "reviewer"}** (${L.t_round} ${q.round ?? "?"}): ${q.question}`);
     }
     out.push(``);
   }
 
-  out.push(HUMAN_MARK, ``);
-  out.push(humanBlock || `_Пиши сюда решения по спорным пунктам и ответы на вопросы выше, затем запусти_ \`/pr-second-pilot:resume ${state.target.slug}\`.`);
+  out.push(HUMAN_ANCHOR);
+  out.push(`## ${L.sec_human}`, ``);
+  out.push(humanBlock || fmt(L.human_hint, state.target.slug));
   out.push(``, `<!-- pr-second-pilot:end-human -->`, ``);
 
   if (state.rounds_log?.length) {
-    out.push(`## Журнал раундов`, ``);
-    out.push(`| Раунд | Вердикт | Блокеров | Проверки | Цена | Остановка |`);
+    out.push(`## ${L.sec_log}`, ``);
+    out.push(`| ${L.t_round} | ${L.t_verdict} | ${L.t_blockers} | ${L.t_checks} | ${L.t_cost} | ${L.t_stop} |`);
     out.push(`|---|---|---|---|---|---|`);
     for (const r of state.rounds_log) {
       out.push(`| ${r.round} | ${r.verdict ?? "—"} | ${r.counts?.blocking ?? "—"} | ${compactGate(r.gate)} | ${r.usage?.window_spent_percent != null ? `${r.usage.window_spent_percent}%` : "—"} | ${r.stop?.status ?? "—"} |`);
@@ -199,7 +193,7 @@ function render(state, humanBlock) {
   }
 
   out.push(`---`, ``, `<!-- pr-second-pilot:state ${state.target.slug} round=${state.round} -->`);
-  out.push(`_Сгенерировано pr-second-pilot. Правь только блок «Ответы человека» — остальное перезапишется._`);
+  out.push(L.generated);
   return out.join("\n") + "\n";
 }
 
@@ -219,7 +213,7 @@ function main() {
     report: reportPath,
     sha256: sha256File(reportPath),
     human_block_preserved: humanBlock !== null && humanBlock.length > 0,
-    human_answers: humanBlock && !humanBlock.startsWith("_Пиши сюда") ? humanBlock : null,
+    human_answers: humanBlock && !humanBlock.startsWith("_") ? humanBlock : null,
   });
 }
 

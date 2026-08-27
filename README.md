@@ -1,131 +1,162 @@
 <p align="center">
-  <img src="docs/hero.png" alt="pr-second-pilot — Codex и Claude в одной кабине" width="720">
+  <img src="docs/hero.png" alt="pr-second-pilot — Codex and Claude in one cockpit" width="720">
 </p>
 
 <h1 align="center">pr-second-pilot</h1>
 
-<p align="center"><em>Второй пилот для пулл-реквестов: Codex судит, Claude чинит,<br>
-цикл крутится до разрешения на мерж — и мержит сам, если правила позволяют.</em></p>
+<p align="center"><em>A second pilot for pull requests: Codex judges, Claude fixes,<br>
+the loop runs until the merge is allowed — and merges it when the rules permit.</em></p>
 
 ---
 
-Плагин Claude Code, который крутит цикл ревью кода между двумя моделями разных
-производителей: **Codex** судит, **Claude** чинит, круг повторяется, пока мерж
-не будет разрешён — или пока не понадобится твоё решение.
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README.ru.md">Русский</a> ·
+  <a href="README.zh.md">简体中文</a> ·
+  <a href="README.es.md">Español</a> ·
+  <a href="README.pt.md">Português</a> ·
+  <a href="README.ja.md">日本語</a>
+</p>
 
-Идея не в том, чтобы получить второе мнение. Разные модели ошибаются по-разному,
-и ревьюер из другого семейства находит в коде Claude то, чего Claude в себе не
-видит.
+A Claude Code plugin that runs a code review loop between two vendors' models.
+Codex reviews the pull request, Claude applies the fixes, the round repeats
+until the merge is allowed or a human is needed.
 
-Референс архитектуры — [plan-tango](https://github.com/egsok/plan-tango) Егора
-Соколова: тот же паттерн, но для планов, а не для кода.
+The point is not a second opinion. Different models fail differently, and a
+reviewer from another family finds things in Claude's code that Claude does not
+see in itself. On the pull request this plugin was built against, the review
+caught a REST call that could never do what the feature promised, a 30-second
+event-loop stall, an error reported to the user as success, lost concurrent
+writes, and a race with a background task — plus two defects in the fixes made
+in response to its own findings.
 
-## Как устроено
+Step-by-step usage: [docs/USAGE.md](docs/USAGE.md).
 
-Один оркестратор — скилл внутри Claude Code. Он ведёт машину состояний и
-вызывает ревьюера безголово через `codex exec`. Никаких двух агентов, следящих
-за файлом: агент существует только внутри своего хода, «фоновое наблюдение»
-всё равно требует внешнего триггера, а два писателя в один markdown дают гонки.
+## How it works
 
-Раунд состоит из семи фаз:
+One orchestrator — a skill inside Claude Code — drives a state machine and
+calls the reviewer headlessly through `codex exec --sandbox read-only`.
 
-| | Фаза | Кто | Что делает |
+There are no two agents watching a file. An agent exists only inside its own
+turn; "watching in the background" needs an external trigger anyway, and two
+writers on one markdown file give you races. So one side orchestrates and the
+other is a called function.
+
+| | Phase | Who | What happens |
 |---|---|---|---|
-| A | Init | скрипт | резолв цели, лок, состояние, `PR/` в `.git/info/exclude` |
-| B | Gate | скрипт | сборка, типы, линт, тесты — красное не отдаётся на ревью |
-| C | Review | Codex | `codex exec --sandbox read-only`, панель ревьюеров параллельно |
-| D | Triage | скрипт | парсинг вердикта, нормализация severity, стабильные id, дедуп |
-| E | Fix | Claude | правки по брифу, ledger, спор вместо молчаливого пропуска |
-| F | Verify | скрипт | повторный gate, ревью только дельты `reviewed_sha..HEAD` |
-| G | Stop | скрипт | ALLOW · бюджет · осцилляция · застой · регресс · needs_human |
-| H | Merge | скрипт | движок правил против живого состояния GitHub, затем `gh pr merge` |
+| A | Init | script | resolve target, lock, state, `PR/` into `.git/info/exclude` |
+| B | Gate | script | build, types, lint, tests — red code is never sent to review |
+| C | Review | Codex | `codex exec --sandbox read-only`, panel members in parallel |
+| D | Triage | script | parse verdict, normalize severity, stable ids, dedupe |
+| E | Fix | Claude | apply fixes, ledger, dispute instead of silent skipping |
+| F | Verify | script | gate again, review only `reviewed_sha..HEAD` |
+| G | Merge | script | 17 rules against live GitHub state, then `gh pr merge` |
+| H | Finish | script | commit round, render report, notify |
 
-Решение об остановке принимает чистая функция, а не модель: счёт severity и
-сравнение наборов замечаний между раундами — арифметика, и модель на ней
-ошибается.
+The stop decision is a pure function, not a model. Counting severities and
+diffing finding sets between rounds is arithmetic, and models get it wrong.
 
-Как этим пользоваться по шагам — [docs/USAGE.md](docs/USAGE.md).
+## Install
 
-## Установка
+Requires Claude Code 2.x, Node 18+, git. `gh` for reviewing by PR number.
 
-Нужны: Claude Code 2.x, Node 18+, git. Для ревью по номеру PR — `gh`.
-
-**1. Codex CLI.** Если у тебя установлено настольное приложение ChatGPT, бинарь
-уже есть — плагин найдёт его сам. Надёжнее поставить отдельно:
+**1. Codex CLI** — the plugin calls it headlessly, so it must be on `PATH`.
 
 ```bash
 npm install -g @openai/codex
 codex login
 ```
 
-**2. Плагин.** В сессии Claude Code, по одной команде на сообщение:
+**2. The plugin** — inside a Claude Code session, one command per message:
 
 ```
-/plugin marketplace add ~/Downloads/pr-second-pilot
+/plugin marketplace add estimablejunk/pr-second-pilot
 /plugin install pr-second-pilot@pr-second-pilot
 ```
 
-**3. Перезагрузка.** В терминальном Claude Code — `/reload-plugins`.
-В расширении VS Code — **Developer: Reload Window**.
+**3. Reload** — `/reload-plugins` in the terminal client. The VS Code extension
+has no such command: use **Developer: Reload Window**.
 
-**4. Проверка.** `/pr-second-pilot:doctor` — покажет, что найдено и каким пулом
-оплачивается ревью.
+**4. Check** — `/pr-second-pilot:doctor` shows what was found and, importantly,
+**which pool pays for the review**.
 
-## Использование
+## Usage
 
 ```
-/pr-second-pilot:review 45              ревью PR №45
-/pr-second-pilot:usage                  цена прогонов и остаток лимитов
-/pr-second-pilot:review branch          ревью текущей ветки против базовой
-/pr-second-pilot:review 45 --reviewer-effort medium --max-rounds 2
-/pr-second-pilot:resume 45              продолжить после твоего ответа или сброса лимита
-/pr-second-pilot:settings               показать настройки
-/pr-second-pilot:doctor                 проверить окружение
+/pr-second-pilot:review 45         review PR #45
+/pr-second-pilot:review branch      review the current branch against its base
+/pr-second-pilot:resume 45          continue after your answer or a limit reset
+/pr-second-pilot:usage              cost of runs and remaining limits
+/pr-second-pilot:settings           show or change settings
+/pr-second-pilot:doctor             check the environment
 ```
 
-Отчёт появляется в `PR/45.md`, состояние — в `PR/.state/45.json`. Наверху отчёта
-— раздел «Что сделано»: короткий человеческий итог, что изменение делает, что
-оказалось сломано и как починили, что сознательно не сделали. Ради него отчёт
-и открывают через неделю; таблицы находок отвечают на другой вопрос. Папка
-исключается через `.git/info/exclude`, а не через `.gitignore`: правка
-отслеживаемого `.gitignore` уехала бы в тот самый PR, который ревьюим.
+You do not need to touch your working copy: it may sit on an unrelated branch
+with uncommitted work. The plugin checks the PR out into its own worktree and
+removes it afterwards.
 
-## Настройки
+The report lands in `PR/45.md`, state in `PR/.state/45.json`. At the top of the
+report is **What was done** — a short plain summary of what the change does,
+what turned out to be broken, and how it was fixed. That is the section people
+open a week later; the finding tables answer a different question.
 
-Пользовательские — `~/.claude/pr-second-pilot/config.json`. Проектные — `.pr-second-pilot.json`
-в корне репозитория. Приоритет: умолчания → пользовательские → проектные →
-флаги команды. Полный список — `plugins/pr-second-pilot/skills/review/config.example.json`.
+`PR/` is excluded through `.git/info/exclude` — local, never committed. Editing
+the tracked `.gitignore` would show up inside the very diff under review.
+
+## Settings
+
+Defaults → `~/.claude/pr-second-pilot/config.json` → `.pr-second-pilot.json` in
+the repo → command flags. Full list in
+[config.example.json](plugins/pr-second-pilot/skills/review/config.example.json).
 
 ```bash
-# Ревьюер: модель, усилие, состав панели
+# Reviewer: model, effort, panel
 /pr-second-pilot:settings reviewer.model=gpt-5.6-sol reviewer.effort=high
 /pr-second-pilot:settings reviewer.panel=tech-lead,security
 
-# Исполнитель: inherit — правит текущая сессия, видно в IDE
-#              subprocess — отдельный claude -p со своей моделью и усилием
+# Fixer: inherit — the current session applies fixes, visible in the IDE
+#        subprocess — a separate `claude -p` with its own model and effort
 /pr-second-pilot:settings fixer.mode=subprocess fixer.model=opus fixer.effort=xhigh
 
-# Цикл
+# Output language of reports and verdicts: en · ru · zh · es · pt · ja
+/pr-second-pilot:settings report.language=en
+
+# Loop
 /pr-second-pilot:settings loop.max_rounds=4 loop.blocking_severities=critical,major
 ```
 
-Усилие исполнителя настраивается только в режиме `subprocess`: у сабагентов
-Claude Code есть поле `model`, но нет поля усилия — оно задаётся флагом
-`--effort` при запуске процесса.
+Fixer effort is configurable only in `subprocess` mode: Claude Code subagents
+carry a `model` field but no effort field — it is set by the `--effort` flag
+when spawning the process.
 
-### Свои ревьюеры
+### Reviewer model
 
-Встроенные — `tech-lead` и `security` в `plugins/pr-second-pilot/reviewers/`.
-Написаны без привязки к репозиторию и стеку: проект выясняется по его же файлам —
-`CLAUDE.md`/`AGENTS.md`, манифесты, workflows, каталоги миграций. Развёрнутый
-чек-лист тех-лида — `reviewers/checklist.md`.
+**As of this release, the best combination is `gpt-5.6-sol` with `effort=high`.**
+That is what found every real defect on the live pull request this plugin was
+built against.
 
-Знания о конкретных технологиях вынесены в профили стека
-(`reviewers/stacks/*.md`) и подключаются автоматически по детекту зависимостей.
-Готов профиль `nextjs-supabase`; `reviewer.stack_profile` принимает `auto`,
-`none` или имя профиля.
+Treat it as a starting point, not a permanent truth. Models get replaced. When a
+new one ships, compare — with `/pr-second-pilot:usage` you can weigh cost as well
+as quality.
 
-Свой ревьюер подключается путём:
+### Language
+
+`report.language` drives the report and the reviewer's verdicts. The reviewer's
+own instructions stay in one language — they are instructions to a model, not
+something a human reads, and keeping them in six translations would doom five of
+them to drift from the sixth. Translating them is a welcome contribution; the
+output language works today.
+
+### Custom reviewers
+
+Built-in ones are `tech-lead` and `security` in
+[reviewers/](plugins/pr-second-pilot/reviewers/), written without ties to any
+repository or stack: they work the project out from its own files — `CLAUDE.md`
+/ `AGENTS.md`, manifests, workflows, migration directories.
+
+Technology-specific knowledge lives in stack profiles
+(`reviewers/stacks/*.md`) and is attached automatically by dependency
+detection. A `nextjs-supabase` profile ships with the plugin.
 
 ```json
 { "reviewer": { "panel": ["tech-lead", "security", "perf"],
@@ -134,124 +165,117 @@ Claude Code есть поле `model`, но нет поля усилия — о�
 
 ### Telegram
 
-Оповещения приходят только на события, ради которых стоит отвлекаться: нужно
-решение, цикл завершён, цикл остановлен, кончился лимит. Прогресс не шлётся —
-бот, который пишет каждый раунд, это бот, которого выключают.
+Notifications fire only for events worth interrupting someone over: a decision
+is needed, the loop finished, the loop stopped, the quota ran out. Progress is
+never sent — a bot that reports every round is a bot people mute.
 
 ```bash
 /pr-second-pilot:settings notify.telegram.enabled=true
 /pr-second-pilot:settings notify.telegram.bot_token=123:ABC notify.telegram.chat_id=456
 ```
 
-Секреты пишутся только в пользовательский конфиг или в переменные окружения
-(`PR_SECOND_PILOT_TG_TOKEN`, `PR_SECOND_PILOT_TG_CHAT`). Тот же ключ в конфиге проекта
-отбрасывается с предупреждением — файл проекта попал бы в ревьюируемый дифф.
+Secrets go only into the user config or environment variables
+(`PR_SECOND_PILOT_TG_TOKEN`, `PR_SECOND_PILOT_TG_CHAT`). The same key in the
+project config is dropped with a warning — that file would land in the reviewed
+diff.
 
-## Мерж
+## Merge
 
-Когда цикл разрешил мерж, агент выполняет его сам. Но разрешение цикла — это
-только половина: вторая половина спрашивается у GitHub. Мержа не будет, если
-сработало хоть одно правило.
+When the loop allows the merge, the agent performs it. But the loop's verdict
+is only half of the decision; the other half is asked of GitHub. Seventeen
+rules can forbid it:
 
-| Правило | Когда запрещает |
+| Rule | Forbids when |
 |---|---|
-| `head_moved` | голова сдвинулась после ревью — этот код никто не смотрел |
-| `open_blockers` · `open_disputes` · `open_questions` | цикл не закрыл замечания |
-| `gate_red` | объективные проверки красные |
-| `checks_failed` · `checks_pending` | CI упал или ещё идёт |
-| `changes_requested` | человек запросил изменения в review |
-| `approval_required` | правила репозитория требуют апрува |
-| `branch_protection` · `conflicts` · `behind_base` | GitHub не готов мержить |
-| `unresolved_threads` | в PR есть неразрешённые треды |
-| `forbidden_label` | метка `do-not-merge`, `wip`, `on-hold`, «не мержить» |
-| `forbidden_path` · `base_not_allowed` | затронуты защищённые пути или база |
+| `head_moved` | the head moved after the review — nobody looked at that code |
+| `open_blockers` · `open_disputes` · `open_questions` | the loop did not close its findings |
+| `gate_red` | objective checks are failing |
+| `checks_failed` · `checks_pending` | CI failed or is still running |
+| `changes_requested` | a human requested changes in review |
+| `approval_required` | repository rules require an approval |
+| `branch_protection` · `conflicts` · `behind_base` | GitHub is not ready to merge |
+| `unresolved_threads` | the PR has unresolved conversations |
+| `forbidden_label` | a `do-not-merge`, `wip`, `on-hold` label |
+| `forbidden_path` · `base_not_allowed` | protected paths or base branch touched |
 
-Мерж пинится к проверенному SHA (`--match-head-commit`): если между проверкой
-правил и вызовом что-то запушили, GitHub откажет, а не смержит новый код.
+The merge is pinned to the reviewed SHA (`--match-head-commit`): if anything
+lands between the rule check and the call, GitHub refuses instead of merging
+newer code.
 
-```bash
-/pr-second-pilot:settings merge.enabled=false           # только рекомендация
-/pr-second-pilot:settings merge.method=squash
-/pr-second-pilot:settings merge.allow_base_branches=develop
-/pr-second-pilot:settings merge.forbid_paths=migrations/,infra/
-```
+`merge.admin=true` bypasses branch protection. The agent never sets it, and the
+config warns when you do.
 
-`merge.admin=true` обходит защиту ветки. Агент никогда не ставит его сам, и
-конфиг предупреждает при включении.
+## Cost of a run
 
-## Стоимость прогона
+A review is not "reading a diff". The reviewer walks the code over dozens of
+turns, and every turn re-sends the whole accumulated context. Measured on a
+real PR: one round cost 2.7M input tokens against 15K output. You pay for
+reading.
 
-Ревью — это не «прочитать дифф». Ревьюер ходит по коду десятками ходов, и
-каждый ход заново отправляет весь накопленный контекст. Замерено на живом PR:
-один раунд стоил 2,7 млн токенов при 15 тысячах выходных. Платишь за чтение.
-
-Что с этим сделано, по убыванию эффекта:
-
-| Мера | Ходов | Токенов |
+| Measure | Turns | Tokens |
 |---|---|---|
-| без всего | 27 | 2 710 833 |
-| `preload_files` — исходники в промпте | 25 | 2 655 348 |
-| инструкции ревьюера внутри промпта | 17 | 1 404 418 |
-| `isolate_skills` + переиспользование треда | 4 | 664 772 |
+| nothing | 27 | 2,710,833 |
+| `preload_files` — sources in the prompt | 25 | 2,655,348 |
+| reviewer instructions inlined | 17 | 1,404,418 |
+| `isolate_skills` + thread reuse | 4 | 664,772 |
 
-**Вкладывание исходников** (`reviewer.preload_files`) даёт немного само по себе,
-но убирает пол.
+**Inlined instructions** are half the saving. A path to a skill file means the
+reviewer spends a turn reading it.
 
-**Инструкции внутри промпта** — половина экономии. Ссылка на файл скила
-означает, что ревьюер потратит ход на его чтение.
+**Skill isolation** (`reviewer.isolate_skills`) — Codex unconditionally loads
+everything from `~/.codex/skills`, and no flag turns that off. The plugin runs
+it in a shadow `CODEX_HOME` symlinked to auth and sessions but without a skills
+directory. This is not only about tokens: among the auto-loaded skills were
+project-specific ones for a different architecture, instructing the model to
+post to the PR and start monitors — directly contradicting the review prompt.
 
-**Изоляция скилов** (`reviewer.isolate_skills`) — Codex безусловно подхватывает
-всё из `~/.codex/skills`, и отключить это флагом нельзя. Плагин запускает его в
-теневом `CODEX_HOME` с симлинками на auth и сессии, но без каталога скилов. Дело
-не только в токенах: среди подхваченного оказывались проектные скилы под другую
-архитектуру, велящие постить в PR и заводить мониторы — прямое противоречие
-промпту ревью.
+`/pr-second-pilot:usage` shows the price of each run and the remaining limits.
 
-`/pr-second-pilot:usage` показывает цену каждого прогона и остаток лимитов.
+## Subscription limits
 
-## Лимиты подписки
+With `codex login`, the review spends your ChatGPT plan limits — the same pool as
+the desktop Codex. How much one run costs depends on your plan, the size of the
+diff and the shape of the repository, so read the real numbers for your setup from
+`/pr-second-pilot:usage` rather than any figure quoted here.
 
-При входе через `codex login` ревью тратит лимиты плана ChatGPT — те же, что
-и настольный Codex. Это учтено в конструкции:
+Running out is built into the design:
 
-- лимит — не сбой, а отдельный резюмируемый исход: состояние сохраняется,
-  `/pr-second-pilot:resume` продолжает с того же места;
-- красные проверки не отдаются на ревью;
-- со второго раунда ревьюер видит только дельту;
-- панель из двух ревьюеров работает в первом раунде, дальше — один;
-- раунд ради `nit` не запускается.
+- hitting the limit is a resumable outcome, not a crash: state is saved and
+  `/pr-second-pilot:resume` continues from the same place;
+- red checks are never sent to review;
+- from the second round the reviewer sees only the delta;
+- a two-reviewer panel runs in the first round only;
+- a round is never spent on a `nit`.
 
-`/pr-second-pilot:doctor` показывает поле `pool`: `subscription` или `api`.
+`/pr-second-pilot:doctor` reports the `pool` field: `subscription` or `api`.
 
-## Инварианты
+## Invariants
 
-- Ревьюер работает в `--sandbox read-only`; флаг зашит литералом и не выводится
-  в конфиг.
-- Отчёт — производная от состояния. Правится вручную только блок
-  `## Ответы человека`, он переживает перерисовку.
-- Исполнителю запрещено ослаблять тесты. Не согласен с тестом — оспаривай,
-  а не правь молча; оркестратор сверяет дифф по тестовым путям.
-- Замечания по файлам вне диффа не блокируют мерж.
-- `loop.hard_cap` не превышается никогда.
-- Мерж идёт только через движок правил. Прямой `gh pr merge` в обход запрещён
-  инвариантом скилла.
-- Запрет правилом не обходится внутри запуска: снять его можно только правкой
-  конфигурации между запусками.
+- The reviewer runs under `--sandbox read-only`; the flag is a literal in the
+  wrapper and is not exposed to config.
+- Every file read comes from the reviewed SHA, never the working copy. Across
+  one live run this rule caught four separate bugs.
+- The report is a view of the state. Only the human-answers block is edited by
+  hand, and it survives re-rendering.
+- The fixer may not weaken tests to close a finding. It can dispute a test with
+  evidence, but not rewrite it silently.
+- Findings about files outside the diff never block the merge.
+- `loop.hard_cap` is never exceeded.
 
-## Разработка
+## Development
 
 ```bash
 cd plugins/pr-second-pilot/skills/review/scripts
-node parse-verdict.mjs   --self-test    # 17 проверок
-node merge-findings.mjs  --self-test    #  9 проверок
-node evaluate-stop.mjs   --self-test    # 17 проверок
-node merge-pr.mjs        --self-test    # 23 проверки правил мержа
-node commit-round.mjs    --self-test    #  8 проверок бухгалтерии
+node parse-verdict.mjs   --self-test    # 17 checks
+node merge-findings.mjs  --self-test    # 13 checks
+node evaluate-stop.mjs   --self-test    # 17 checks
+node merge-pr.mjs        --self-test    # 23 merge-rule checks
+node commit-round.mjs    --self-test    #  8 bookkeeping checks
 ```
 
-Сырые ответы ревьюера, промпты и брифы остаются в
-`PR/.state/<slug>.work/round<N>/`. Странный вердикт — начинай оттуда.
+Raw reviewer replies, prompts and briefs stay in
+`PR/.state/<slug>.work/round<N>/`. If a verdict looks strange, start there.
 
-## Лицензия
+## License
 
 MIT.
