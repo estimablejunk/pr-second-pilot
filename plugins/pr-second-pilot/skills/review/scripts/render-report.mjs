@@ -1,0 +1,226 @@
+// Render PR/<slug>.md from state. The report is a view, never the source of
+// truth — regenerating it must always be safe, and hand-edits to it are only
+// read back from the one block that invites them (## Ответы человека).
+//
+//   node render-report.mjs --state <path>
+
+import { existsSync, readFileSync } from "node:fs";
+import { emit, bail, parseArgs, readJson, writeAtomic, sha256File } from "./lib.mjs";
+
+const STATUS_LINE = {
+  in_review: "🔄 идёт ревью",
+  fixing: "🔧 идут правки",
+  awaiting_human: "⏸ ждёт твоего решения",
+  merged: "🚀 смержено",
+  allowed: "✅ мерж разрешён",
+  allowed_with_advisory: "✅ мерж разрешён (есть необязательные замечания)",
+  rate_limited: "⏳ лимит подписки — можно продолжить позже",
+  oscillating: "⚠️ замечание открывается повторно — цикл остановлен",
+  stuck: "⚠️ прогресса нет — цикл остановлен",
+  regressed: "⚠️ блокеров стало больше — цикл остановлен",
+  max_rounds: "⚠️ бюджет раундов исчерпан",
+  needs_human: "⏸ нужно твоё решение",
+  failed: "❌ сбой",
+};
+
+const SEV = { critical: "🔴 critical", major: "🟠 major", minor: "🟡 minor", nit: "⚪ nit" };
+const ST = {
+  open: "открыто", fixed: "исправлено, ждёт проверки", verified: "подтверждено закрытым",
+  disputed: "оспорено исполнителем", wontfix: "снято ревьюером", advisory: "необязательное",
+};
+
+/**
+ * The rounds table needs a glance-readable cell, not the raw gate summary.
+ * With gate.source="ci" that summary is six job names with statuses — it turns
+ * a five-row table into an unreadable wall.
+ */
+function compactGate(summary) {
+  if (!summary) return "—";
+  // Считаем сами статусы, а не разбиваем строку: имена джоб содержат и
+  // двоеточия, и пробелы («ci:api · ruff (lint + format) [non-blocking]:pass»),
+  // и любое разбиение по разделителю их дробит.
+  const statuses = [...String(summary).matchAll(/:(pass|fail|pending|timeout|skipped|unavailable)(?=\s|$)/g)]
+    .map((m) => m[1]);
+  if (!statuses.length) return "—";
+  const pass = statuses.filter((x) => x === "pass").length;
+  const bad = statuses.filter((x) => ["fail", "timeout", "pending"].includes(x));
+  return bad.length ? `${pass}/${statuses.length} ✓, ${bad.length} ✗` : `${pass}/${statuses.length} ✓`;
+}
+
+const HUMAN_MARK = "## Ответы человека";
+
+/** The one hand-editable region: preserved verbatim across re-renders. */
+function extractHumanBlock(reportPath) {
+  if (!existsSync(reportPath)) return null;
+  const text = readFileSync(reportPath, "utf8");
+  const i = text.indexOf(HUMAN_MARK);
+  if (i < 0) return null;
+  const rest = text.slice(i + HUMAN_MARK.length);
+  const end = rest.search(/\n<!-- pr-second-pilot:end-human -->/);
+  return (end < 0 ? rest : rest.slice(0, end)).trim();
+}
+
+function renderFinding(f) {
+  const lines = [
+    `#### \`${f.id}\` ${SEV[f.severity] ?? f.severity} — ${f.title}`,
+    ``,
+    `**Статус:** ${ST[f.status] ?? f.status}${f.out_of_scope ? " · вне диффа" : ""}` +
+    `${f.unproven ? " · понижен: нет механизма отказа" : ""}` +
+    `${(f.reopened_count || 0) > 0 ? ` · открывалось повторно ×${f.reopened_count}` : ""}`,
+    f.file ? `**Где:** \`${f.file}\`` : null,
+    f.sources?.length ? `**Нашёл:** ${f.sources.join(", ")}` : null,
+    ``,
+    f.trigger ? `- **Триггер.** ${f.trigger}` : null,
+    f.mechanism ? `- **Механизм.** ${f.mechanism}` : null,
+    f.consequence ? `- **Последствие.** ${f.consequence}` : null,
+    f.required ? `- **Требуется.** ${f.required}` : null,
+    f.proof ? `- **Доказательство исправления.** ${f.proof}` : null,
+  ].filter((l) => l !== null);
+
+  const history = (f.history || []).filter((h) => h.actor === "fixer" || h.action === "dispute_rejected");
+  if (history.length) {
+    lines.push(``, `<details><summary>История</summary>`, ``);
+    for (const h of history) {
+      lines.push(`- раунд ${h.round} · ${h.actor} · ${h.action}${h.note ? ` — ${h.note}` : ""}${h.edit ? ` (\`${h.edit}\`)` : ""}`);
+    }
+    lines.push(``, `</details>`);
+  }
+  return lines.join("\n");
+}
+
+function render(state, humanBlock) {
+  const t = state.target;
+  const c = state.counts || {};
+  const findings = state.findings || [];
+  const group = (pred) => findings.filter(pred);
+
+  const open = group((f) => f.status === "open");
+  const fixed = group((f) => f.status === "fixed");
+  const disputed = group((f) => f.status === "disputed");
+  const advisory = group((f) => f.status === "advisory");
+  const closed = group((f) => f.status === "verified" || f.status === "wontfix");
+
+  const out = [];
+  out.push(`# Ревью ${t.number ? `PR #${t.number}` : `ветки \`${t.head_ref}\``}`);
+  out.push(``);
+  out.push(`> ${STATUS_LINE[state.status] ?? state.status}`);
+  out.push(``);
+  out.push(`| | |`);
+  out.push(`|---|---|`);
+  if (t.title) out.push(`| Заголовок | ${t.title} |`);
+  if (t.url) out.push(`| Ссылка | ${t.url} |`);
+  out.push(`| База → голова | \`${t.base_ref}\` → \`${t.head_ref}\` |`);
+  out.push(`| Ревьюил коммит | \`${(state.reviewed_sha || t.head_sha || "").slice(0, 12)}\` |`);
+  out.push(`| Объём | +${t.stats?.additions ?? "?"} / −${t.stats?.deletions ?? "?"} в ${t.stats?.files ?? "?"} файлах |`);
+  out.push(`| Раунд | ${state.round} из ${Math.min(state.config?.loop?.max_rounds ?? 4, state.config?.loop?.hard_cap ?? 8)} |`);
+  out.push(`| Ревьюер | ${state.config?.reviewer?.model} · усилие ${state.config?.reviewer?.effort} · ${(state.config?.reviewer?.panel ?? []).join(" + ")} |`);
+  out.push(`| Исполнитель | ${state.config?.fixer?.mode === "inherit" ? "текущая сессия" : `${state.config?.fixer?.model} · усилие ${state.config?.fixer?.effort}`} |`);
+  out.push(`| Обновлено | ${state.updated_at} |`);
+  out.push(``);
+
+  // Итог — сразу под статусом. Отчёт открывают через неделю ради ответа
+  // «что в итоге получилось», а не ради пятнадцати карточек с историями.
+  if (state.summary?.text) {
+    out.push(`## Что сделано`, ``, state.summary.text.trim(), ``);
+  }
+
+  if (state.merge?.merged) {
+    out.push(`## Смержено`, ``);
+    out.push(`Метод: **${state.merge.method}**, коммит \`${(state.merge.merge_commit || "").slice(0, 12)}\`` +
+      `${state.merge.merged_at ? `, ${state.merge.merged_at}` : ""}.`);
+    if (state.merge.branch_deleted === false) {
+      out.push(``, `Ветка не удалена: ${state.merge.cleanup_note || "уборка после мержа не прошла"}.`);
+    }
+    out.push(``);
+  }
+
+  if (state.last_stop?.human_note) {
+    out.push(`## ⚠️ Требуется решение`, ``, state.last_stop.human_note, ``);
+  }
+
+  if (state.gate && !state.gate.skipped) {
+    out.push(`## Объективные проверки`, ``);
+    out.push(state.gate.checks.map((c2) =>
+      `- ${c2.status === "pass" ? "✅" : c2.status === "unavailable" ? "➖" : "❌"} **${c2.name}** — \`${c2.command}\`` +
+      `${c2.status === "pass" ? "" : ` → ${c2.status}`}`).join("\n"));
+    out.push(``);
+  }
+
+  out.push(`## Итог`, ``);
+  out.push(`Блокеров: **${c.blocking ?? 0}** · открыто: ${c.open ?? 0} · ждут проверки: ${c.fixed ?? 0} · ` +
+           `закрыто: ${(c.verified ?? 0) + (c.wontfix ?? 0)} · необязательных: ${c.advisory ?? 0}`);
+  out.push(``);
+  if (state.counts?.severity_counts) {
+    const s = state.counts.severity_counts;
+    out.push(`Открытые по уровням: 🔴 ${s.critical ?? 0} · 🟠 ${s.major ?? 0} · 🟡 ${s.minor ?? 0} · ⚪ ${s.nit ?? 0}`);
+    out.push(``);
+  }
+
+  const section = (title, list) => {
+    if (!list.length) return;
+    out.push(`## ${title} (${list.length})`, ``);
+    for (const f of list) { out.push(renderFinding(f), ``); }
+  };
+
+  section("Блокирует мерж", open.filter((f) => (state.config?.loop?.blocking_severities ?? ["critical", "major"]).includes(f.severity)));
+  section("Открыто, не блокирует", open.filter((f) => !(state.config?.loop?.blocking_severities ?? ["critical", "major"]).includes(f.severity)));
+  section("Исправлено, ждёт проверки", fixed);
+  section("Спорные — нужен арбитраж", disputed);
+  section("Необязательные замечания", advisory);
+
+  if (closed.length) {
+    out.push(`## Закрыто (${closed.length})`, ``, `<details><summary>Показать</summary>`, ``);
+    for (const f of closed) {
+      out.push(`- \`${f.id}\` ${SEV[f.severity] ?? f.severity} ${f.title} — ${ST[f.status]}`);
+    }
+    out.push(``, `</details>`, ``);
+  }
+
+  if (state.human_questions?.length) {
+    out.push(`## Вопросы к тебе`, ``);
+    for (const q of state.human_questions) {
+      out.push(`- **${q.member ?? "ревьюер"}** (раунд ${q.round ?? "?"}): ${q.question}`);
+    }
+    out.push(``);
+  }
+
+  out.push(HUMAN_MARK, ``);
+  out.push(humanBlock || `_Пиши сюда решения по спорным пунктам и ответы на вопросы выше, затем запусти_ \`/pr-second-pilot:resume ${state.target.slug}\`.`);
+  out.push(``, `<!-- pr-second-pilot:end-human -->`, ``);
+
+  if (state.rounds_log?.length) {
+    out.push(`## Журнал раундов`, ``);
+    out.push(`| Раунд | Вердикт | Блокеров | Проверки | Цена | Остановка |`);
+    out.push(`|---|---|---|---|---|---|`);
+    for (const r of state.rounds_log) {
+      out.push(`| ${r.round} | ${r.verdict ?? "—"} | ${r.counts?.blocking ?? "—"} | ${compactGate(r.gate)} | ${r.usage?.window_spent_percent != null ? `${r.usage.window_spent_percent}%` : "—"} | ${r.stop?.status ?? "—"} |`);
+    }
+    out.push(``);
+  }
+
+  out.push(`---`, ``, `<!-- pr-second-pilot:state ${state.target.slug} round=${state.round} -->`);
+  out.push(`_Сгенерировано pr-second-pilot. Правь только блок «Ответы человека» — остальное перезапишется._`);
+  return out.join("\n") + "\n";
+}
+
+function main() {
+  const args = parseArgs();
+  if (!args.state) bail("arg_missing", { missing: "--state" });
+  const state = readJson(args.state);
+  if (!state) bail("state_unreadable", { path: args.state });
+  const reportPath = args.out || state.paths?.report;
+  if (!reportPath) bail("report_path_unknown");
+
+  const humanBlock = extractHumanBlock(reportPath);
+  writeAtomic(reportPath, render(state, humanBlock));
+
+  emit({
+    ok: true,
+    report: reportPath,
+    sha256: sha256File(reportPath),
+    human_block_preserved: humanBlock !== null && humanBlock.length > 0,
+    human_answers: humanBlock && !humanBlock.startsWith("_Пиши сюда") ? humanBlock : null,
+  });
+}
+
+main();

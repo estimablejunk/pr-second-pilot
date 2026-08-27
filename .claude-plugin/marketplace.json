@@ -1,0 +1,11 @@
+{
+  "name": "pr-second-pilot",
+  "owner": { "name": "estimablejunk" },
+  "plugins": [
+    {
+      "name": "pr-second-pilot",
+      "source": "./plugins/pr-second-pilot",
+      "description": "Codex reviews the PR, Claude fixes it, the loop runs until merge is allowed or a human is needed."
+    }
+  ]
+}

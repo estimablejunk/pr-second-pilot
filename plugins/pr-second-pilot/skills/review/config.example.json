@@ -1,0 +1,96 @@
+{
+  "_": "Скопируй нужное в ~/.claude/pr-second-pilot/config.json. Ключи в проекте — в .pr-second-pilot.json (кроме секретов).",
+
+  "reviewer": {
+    "model": "gpt-5.6-sol",
+    "effort": "high",
+    "panel": ["tech-lead", "security"],
+    "panel_rounds": 1,
+    "stack_profile": "auto",
+    "_preload": "Вкладывать исходники в промпт вместо чтения командами. Главный рычаг стоимости: 4,2 млн токенов за раунд против ~0,5 млн.",
+    "preload_files": "changed",
+    "preload_depth": 1,
+    "preload_max_kb": 60,
+    "preload_budget_kb": 200,
+    "delta_panel": ["tech-lead"],
+    "service_tier": null,
+    "profile": null,
+    "extra_config": [],
+    "skills": {
+      "_": "Свои ревью-скилы: имя → абсолютный путь к .md. Перекрывает встроенные.",
+      "perf": "/Users/me/skills/perf-review.md"
+    },
+    "timeout_minutes": 25
+  },
+
+  "fixer": {
+    "_mode": "inherit — правит текущая сессия (видно в IDE); subprocess — отдельный claude -p со своей моделью и усилием",
+    "mode": "inherit",
+    "model": "opus",
+    "effort": "high",
+    "permission_mode": "acceptEdits",
+    "allowed_tools": ["Read", "Edit", "Write", "Bash", "Grep", "Glob"],
+    "continue_session": true,
+    "timeout_minutes": 30
+  },
+
+  "loop": {
+    "max_rounds": 4,
+    "hard_cap": 8,
+    "blocking_severities": ["critical", "major"],
+    "thread_mode": "continue",
+    "delta_review": true,
+    "scope_guard": true,
+    "dispute_rounds_before_escalation": 2
+  },
+
+  "gate": {
+    "enabled": true,
+    "autodetect": true,
+    "commands": [
+      { "name": "types", "cmd": "npm run typecheck" },
+      { "name": "tests", "cmd": "npm test -- --run" },
+      { "name": "build", "cmd": "npm run build", "optional": true }
+    ],
+    "block_review_on_failure": true,
+    "timeout_minutes": 15
+  },
+
+  "merge": {
+    "_": "Агент мержит сам, когда цикл разрешил. Каждый ключ ниже — правило, способное это запретить.",
+    "enabled": true,
+    "method": "auto",
+    "delete_branch": true,
+    "require_clean_gate": true,
+    "require_all_checks": true,
+    "allow_without_approval": false,
+    "forbid_with_unresolved_threads": true,
+    "forbid_with_open_questions": true,
+    "allow_behind": false,
+    "admin": false,
+    "max_advisory": null,
+    "forbid_labels": ["do-not-merge", "wip", "on-hold", "не мержить"],
+    "forbid_paths": [],
+    "allow_base_branches": null,
+    "body": null
+  },
+
+  "report": {
+    "dir": "PR",
+    "exclude_via": "git-exclude",
+    "language": "ru"
+  },
+
+  "notify": {
+    "telegram": {
+      "_": "Только в ~/.claude/pr-second-pilot/config.json или через переменные окружения.",
+      "enabled": false,
+      "bot_token": null,
+      "chat_id": null,
+      "bot_token_env": "PR_SECOND_PILOT_TG_TOKEN",
+      "chat_id_env": "PR_SECOND_PILOT_TG_CHAT",
+      "events": ["needs_human", "allowed", "stopped", "rate_limited", "failed"],
+      "silent": false
+    }
+  }
+}
