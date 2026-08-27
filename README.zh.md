@@ -82,6 +82,18 @@ codex login
 **5. 检查**——`/pr-second-pilot:doctor` 会显示找到了什么，以及最重要的一点：
 **这次评审花的是哪个额度**。
 
+## 更新
+
+```
+claude plugin update pr-second-pilot@pr-second-pilot
+```
+
+必须使用完整名称。插件的寻址方式是 `<插件>@<市场>`，而这里两者恰好同名——重复看
+起来像笔误，但并不是。用短名称会得到「未找到」。
+
+在会话中也可以用 `/plugin` → **Marketplaces → pr-second-pilot → Update**。第三方
+市场默认关闭自动更新，同一菜单里可以打开。
+
 ## 使用
 
 ```

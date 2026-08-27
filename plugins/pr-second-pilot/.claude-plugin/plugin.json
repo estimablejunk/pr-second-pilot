@@ -1,6 +1,6 @@
 {
   "name": "pr-second-pilot",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Cross-vendor PR review loop: a configurable reviewer (Codex) blocks or allows the merge, a configurable fixer (Claude) applies the fixes, state and report live in PR/. Escalates to a human and can ping Telegram.",
   "author": {
     "name": "estimablejunk"

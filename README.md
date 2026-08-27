@@ -88,6 +88,20 @@ touches auth or payments (in which case the second reviewer earns its cost).
 **5. Check** — `/pr-second-pilot:doctor` shows what was found and, importantly,
 **which pool pays for the review**.
 
+## Update
+
+```
+claude plugin update pr-second-pilot@pr-second-pilot
+```
+
+The qualified name is required. A plugin is addressed as
+`<plugin>@<marketplace>`, and here both happen to be `pr-second-pilot` — the
+doubling looks like a typo but is not. The short form answers "not found".
+
+In a session you can also use `/plugin` → **Marketplaces → pr-second-pilot →
+Update**. Third-party marketplaces have auto-update off by default; the same
+menu turns it on.
+
 ## Usage
 
 ```

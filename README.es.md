@@ -90,6 +90,20 @@ autenticación o pagos (en cuyo caso el segundo revisor se paga solo).
 **5. Comprobar** — `/pr-second-pilot:doctor` muestra qué se encontró y, sobre
 todo, **con qué bolsa se paga la revisión**.
 
+## Actualización
+
+```
+claude plugin update pr-second-pilot@pr-second-pilot
+```
+
+El nombre completo es obligatorio. Un plugin se direcciona como
+`<plugin>@<marketplace>`, y aquí ambos coinciden — la duplicación parece una
+errata, pero no lo es. La forma corta responde «no encontrado».
+
+Dentro de una sesión también sirve `/plugin` → **Marketplaces →
+pr-second-pilot → Update**. Los marketplaces de terceros traen la
+autoactualización desactivada; se activa en ese mismo menú.
+
 ## Uso
 
 ```
