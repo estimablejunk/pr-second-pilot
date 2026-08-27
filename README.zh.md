@@ -73,7 +73,13 @@ codex login
 **3. 重载**——终端客户端用 `/reload-plugins`。VS Code 扩展没有该命令，请用
 **Developer: Reload Window**。
 
-**4. 检查**——`/pr-second-pilot:doctor` 会显示找到了什么，以及最重要的一点：
+**4. 配置**——`/pr-second-pilot:setup` 会查看你的仓库与环境，给出带理由的设置
+建议。在你同意前不写入任何东西，并且只显示真正需要改动的项。
+
+它能识别的包括：测试是否需要真实服务（若是，本地 gate 什么都检查不到，应当用 CI），
+以及代码是否涉及鉴权或支付（若是，第二位评审者物有所值）。
+
+**5. 检查**——`/pr-second-pilot:doctor` 会显示找到了什么，以及最重要的一点：
 **这次评审花的是哪个额度**。
 
 ## 使用
@@ -84,6 +90,7 @@ codex login
 /pr-second-pilot:resume 45          在你答复或额度恢复后继续
 /pr-second-pilot:usage              运行开销与剩余额度
 /pr-second-pilot:settings           查看或修改设置
+/pr-second-pilot:setup              带理由的首次配置
 /pr-second-pilot:doctor             检查环境
 ```
 

@@ -146,6 +146,16 @@ function main() {
   const warned = checks.filter((c) => c.status === "warn" || c.warn);
 
   if (args.hook) {
+    // Момент, когда подсказка про setup уместна: инструменты на месте, а
+    // конфига ещё нет. Как только человек его запишет, подсказка исчезнет
+    // сама — напоминать в каждой сессии значит приучить её игнорировать.
+    const ready = !failed.some((c) => c.name === "codex" || c.name === "codex auth");
+    if (ready && !readJson(USER_CONFIG)) {
+      process.stdout.write(
+        "pr-second-pilot: настроек ещё нет. /pr-second-pilot:setup посмотрит на репозиторий и предложит их с обоснованием.\n"
+      );
+      process.exit(0);
+    }
     // Quiet unless codex itself is unusable — a SessionStart hook that chatters
     // on every start is a hook people disable.
     const blocking = failed.filter((c) => c.name === "codex" || c.name === "codex auth");

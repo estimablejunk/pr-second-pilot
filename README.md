@@ -77,7 +77,15 @@ codex login
 **3. Reload** — `/reload-plugins` in the terminal client. The VS Code extension
 has no such command: use **Developer: Reload Window**.
 
-**4. Check** — `/pr-second-pilot:doctor` shows what was found and, importantly,
+**4. Set up** — `/pr-second-pilot:setup` looks at your repository and environment
+and proposes settings, each with the reason behind it. It writes nothing until you
+say so, and it only shows what actually needs changing.
+
+It detects, among other things, whether your tests need live services (in which
+case a local gate checks nothing and CI should be the gate) and whether the code
+touches auth or payments (in which case the second reviewer earns its cost).
+
+**5. Check** — `/pr-second-pilot:doctor` shows what was found and, importantly,
 **which pool pays for the review**.
 
 ## Usage
@@ -88,6 +96,7 @@ has no such command: use **Developer: Reload Window**.
 /pr-second-pilot:resume 45          continue after your answer or a limit reset
 /pr-second-pilot:usage              cost of runs and remaining limits
 /pr-second-pilot:settings           show or change settings
+/pr-second-pilot:setup              first-time setup with reasons
 /pr-second-pilot:doctor             check the environment
 ```
 

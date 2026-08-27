@@ -79,7 +79,15 @@ codex login
 **3. Recargar** — `/reload-plugins` en el cliente de terminal. La extensión de
 VS Code no tiene ese comando: usa **Developer: Reload Window**.
 
-**4. Comprobar** — `/pr-second-pilot:doctor` muestra qué se encontró y, sobre
+**4. Configurar** — `/pr-second-pilot:setup` mira tu repositorio y tu entorno y
+propone ajustes, cada uno con su motivo. No escribe nada hasta que lo apruebes, y
+solo muestra lo que realmente hay que cambiar.
+
+Detecta, entre otras cosas, si tus tests necesitan servicios vivos (en cuyo caso un
+gate local no comprueba nada y el gate debe ser CI) y si el código toca
+autenticación o pagos (en cuyo caso el segundo revisor se paga solo).
+
+**5. Comprobar** — `/pr-second-pilot:doctor` muestra qué se encontró y, sobre
 todo, **con qué bolsa se paga la revisión**.
 
 ## Uso
@@ -90,6 +98,7 @@ todo, **con qué bolsa se paga la revisión**.
 /pr-second-pilot:resume 45          continuar tras tu respuesta o el reinicio del límite
 /pr-second-pilot:usage              coste de las ejecuciones y límites restantes
 /pr-second-pilot:settings           ver o cambiar ajustes
+/pr-second-pilot:setup              configuración inicial con motivos
 /pr-second-pilot:doctor             comprobar el entorno
 ```
 

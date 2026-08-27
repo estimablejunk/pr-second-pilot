@@ -76,7 +76,15 @@ codex login
 **3. 再読み込み** — ターミナル版では `/reload-plugins`。VS Code 拡張にはこの
 コマンドがないので **Developer: Reload Window** を使います。
 
-**4. 確認** — `/pr-second-pilot:doctor` が何を検出したか、そして何より
+**4. 初期設定** — `/pr-second-pilot:setup` がリポジトリと環境を見て、理由つきで
+設定を提案します。あなたが同意するまで何も書き込まず、本当に変更が要る項目だけを
+表示します。
+
+判定するのは、たとえばテストが実サービスを必要とするか（必要なら、ローカルの gate は
+何も検証できず、gate は CI であるべきです）、コードが認証や決済に触れているか（触れて
+いるなら、2 人目のレビュアーは元が取れます）。
+
+**5. 確認** — `/pr-second-pilot:doctor` が何を検出したか、そして何より
 **どの枠でレビュー代を払うのか**を表示します。
 
 ## 使い方
@@ -87,6 +95,7 @@ codex login
 /pr-second-pilot:resume 45          あなたの回答や上限リセットのあとに再開
 /pr-second-pilot:usage              実行コストと残りの上限
 /pr-second-pilot:settings           設定の表示・変更
+/pr-second-pilot:setup              理由つきの初期設定
 /pr-second-pilot:doctor             環境の確認
 ```
 
