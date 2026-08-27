@@ -358,7 +358,7 @@ function extractContract(contractPath) {
   return body;
 }
 
-function buildPrompt({ template, reviewerText, target, diff, gate, findings, isDelta, round, cfg, contract, stack, preload }) {
+function buildPrompt({ template, reviewerText, target, headSha, diff, gate, findings, isDelta, round, cfg, contract, stack, preload }) {
   return template
     .replace("{{RESET_BLOCK}}", round > 1 ? RESET_BLOCK : "")
     .replace("{{REVIEWER_INSTRUCTIONS}}", reviewerText)
@@ -366,7 +366,7 @@ function buildPrompt({ template, reviewerText, target, diff, gate, findings, isD
     .replace("{{MODE}}", isDelta
       ? "ПОВТОРНОЕ РЕВЬЮ ПОСЛЕ ПРАВОК. Ниже дельта — только то, что изменилось с прошлого твоего вердикта."
       : "ПЕРВОЕ РЕВЬЮ. Ниже полный дифф изменения.")
-    .replace("{{TARGET}}", renderTarget(target))
+    .replace("{{TARGET}}", renderTarget({ ...target, head_sha: headSha || target.head_sha }))
     .replace("{{GATE}}", renderGate(gate))
     .replace("{{OPEN_FINDINGS}}", renderOpenFindings(findings, cfg))
     .replace("{{OUTPUT_LANGUAGE}}",
@@ -390,6 +390,27 @@ function main() {
   const cfg = args["config-json"] ? JSON.parse(args["config-json"]) : state.config;
   const round = Number(args.round);
 
+  // SHA, который ревьюер СЕЙЧАС будет смотреть.
+  //
+  // Раньше бралось из state.target.head_sha, а его пишет только init — и
+  // больше никто. В дельта-раунде это означало дифф с новыми правками рядом с
+  // телами тех же файлов из коммита ДО них. Ревьюер видел противоречие и делал
+  // единственный возможный вывод: заявленных исправлений в голове нет. То есть
+  // ни одно замечание не могло перейти из fixed в verified — цикл структурно
+  // не умел ничего подтверждать.
+  //
+  // Молча угадывать здесь нельзя (седьмой инвариант: любое чтение файла — от
+  // ревьюемого SHA). Для дельта-раунда SHA обязателен и обязан совпадать с
+  // `--to`, которым считалась сама дельта.
+  const headSha = typeof args["head-sha"] === "string" && args["head-sha"]
+    ? args["head-sha"] : null;
+  if (args.delta && !headSha) {
+    bail("head_sha_required", {
+      detail: "--head-sha обязателен вместе с --delta",
+      hint: "передай тот же SHA, что и в resolve-target --to: тела файлов и дельта обязаны быть из одного коммита",
+    });
+  }
+
   // A delta review only makes sense once some earlier round actually produced a
   // verdict. A round that ended on a rate limit or a crash committed state
   // without ever reviewing anything — resuming into "delta mode" there would
@@ -406,6 +427,25 @@ function main() {
   const template = readFileSync(templatePath, "utf8");
   const contract = extractContract(contractPath);
 
+  const reviewSha = headSha || state.target?.head_sha || null;
+  if (reviewSha) {
+    if (!git(state.repo_root, ["cat-file", "-e", `${reviewSha}^{commit}`]).ok) {
+      bail("head_sha_unknown", { detail: `${reviewSha} не разрешается в коммит` });
+    }
+    // Дельта считается вперёд от отревьюенного: если новый SHA не потомок
+    // старого, то либо передали не тот коммит, либо ветку переписали — и
+    // сравнивать тела файлов с этой дельтой бессмысленно.
+    if (args.delta && state.reviewed_sha && state.reviewed_sha !== reviewSha) {
+      const ok = git(state.repo_root, ["merge-base", "--is-ancestor", state.reviewed_sha, reviewSha]).ok;
+      if (!ok) {
+        bail("head_not_descendant", {
+          detail: `${reviewSha.slice(0, 12)} не является потомком отревьюенного ${state.reviewed_sha.slice(0, 12)}`,
+          hint: "ветку переписали (force-push) или передан не тот SHA — начни раунд заново с полного диффа",
+        });
+      }
+    }
+  }
+
   const diff = readFileSync(args["diff-file"], "utf8");
   // resolve-target --delta-from кладёт рядом список изменённых в дельте файлов.
   const deltaFileList = args["delta-files"]
@@ -417,11 +457,11 @@ function main() {
   // а холодный раунд иначе снова вычитывает всё командами. На дельте
   // вкладываем только её файлы и без импортов: контекст задачи узкий.
   const deltaFiles = isDelta
-    ? { files: (deltaFileList || []).map((p) => ({ path: p })), head_sha: state.target.head_sha }
+    ? { files: (deltaFileList || []).map((p) => ({ path: p })), head_sha: reviewSha }
     : null;
   const preload = isDelta
     ? preloadFiles(state.repo_root, deltaFiles, { ...cfg, reviewer: { ...cfg.reviewer, preload_depth: 0 } })
-    : preloadFiles(state.repo_root, state.target, cfg);
+    : preloadFiles(state.repo_root, { ...state.target, head_sha: reviewSha }, cfg);
 
   const panel = (isDelta && round > (cfg.reviewer.panel_rounds ?? 1))
     ? (cfg.reviewer.delta_panel?.length ? cfg.reviewer.delta_panel : cfg.reviewer.panel)
@@ -440,6 +480,7 @@ function main() {
     writeAtomic(promptFile, buildPrompt({
       template, reviewerText: loaded.text, target: state.target, diff,
       gate: state.gate, findings: state.findings || [], isDelta, round, cfg, contract, stack, preload,
+      headSha: reviewSha,
     }));
     members.push({
       name,
@@ -468,6 +509,7 @@ function main() {
     panel,
     delta_downgraded_to_full: deltaDowngraded || undefined,
     inlined_references: [...new Set(inlinedRefs)],
+    head_sha: reviewSha,
     preloaded: preload.included,
     preloaded_deps: preload.deps ?? [],
     preload_skipped: preload.skipped,

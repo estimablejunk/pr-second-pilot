@@ -37,9 +37,19 @@ const strip = (s) => String(s ?? "")
   .replace(/^\s*[-*•]\s*/, "")
   .trim();
 
+// Слова, означающие «это опять то же самое». Ревьюер добавляет их во втором
+// раунде («отказ ВСЁ ЕЩЁ подтверждается как успех»), заголовок меняется, хеш
+// расходится — и то же самое замечание приезжает с новым id. Дедупликация по
+// стабильным id рассчитана ровно на этот случай, поэтому признак повторности
+// из идентичности вычищается: он про историю, а не про суть дефекта.
+// Границы заданы явно: `\b` в JS определён через [A-Za-z0-9_], поэтому перед
+// кириллической буквой границы слова не существует и \b там не срабатывает.
+const RECURRENCE = /(?<=^|\s)(по-прежнему|по прежнему|всё ещё|все ещё|всё также|снова|опять|вновь|как и прежде|still|again|yet|once again)(?=$|[\s.,;:!?])/gi;
+
 const normalizeForId = (s) => String(s ?? "")
   .toLowerCase()
   .replace(/[`*_"'()\[\]]/g, "")
+  .replace(RECURRENCE, " ")
   .replace(/\d+/g, "#")          // line numbers drift between rounds
   .replace(/\s+/g, " ")
   .trim();
@@ -240,6 +250,18 @@ function selfTest() {
   checks.push(["critical без механизма → minor", unproven.findings[0].severity === "minor" && unproven.findings[0].unproven]);
   const scoped = parse(SAMPLE, { changedFiles: ["src/lib/queries/orders.ts"] });
   checks.push(["out_of_scope помечен", scoped.findings[1].out_of_scope === true]);
+
+  // Повторность не меняет идентичность — иначе второй раунд заводит дубликат
+  // вместо того, чтобы переоткрыть уже известное замечание.
+  const same = (a, b) => findingId("api/x.py:10", a) === findingId("api/x.py:88", b);
+  checks.push(["«всё ещё» не меняет id",
+    same("Отказ подтверждается как успех", "Отказ всё ещё подтверждается как успех")]);
+  checks.push(["«по-прежнему» не меняет id",
+    same("Повторная доставка обходит stop-intent", "Повторная доставка по-прежнему обходит stop-intent")]);
+  checks.push(["«still» не меняет id",
+    same("Deferred stop failure is reported as success", "Deferred stop failure is still reported as success")]);
+  checks.push(["разные дефекты остаются разными",
+    !same("Отказ подтверждается как успех", "Гонка при создании бота")]);
 
   const failed = checks.filter(([, ok]) => !ok);
   emit({ ok: failed.length === 0, total: checks.length, failed: failed.map(([n]) => n) });
